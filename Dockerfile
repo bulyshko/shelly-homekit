@@ -31,4 +31,4 @@ VOLUME /shelly
 
 COPY --from=build-env /usr/bin/shelly /usr/local/bin/shelly
 
-ENTRYPOINT ["/usr/local/bin/shelly", "-broker", "$BROKER", "-pin", "$PIN", "-data", "/shelly"]
+ENTRYPOINT /usr/local/bin/shelly -broker ${BROKER} -pin ${PIN} -data /shelly
