@@ -20,6 +20,9 @@ RUN set -ex && \
 
 FROM busybox
 
+ENV BROKER ""
+ENV PIN ""
+
 LABEL maintainer="Romuald Bulyshko <opensource@bulyshko.com>" \
     description="Shelly MQTT HomeKit bridge"
 
@@ -28,4 +31,4 @@ VOLUME /shelly
 
 COPY --from=build-env /usr/bin/shelly /usr/local/bin/shelly
 
-ENTRYPOINT ["/usr/local/bin/shelly", "-d", "/shelly"]
+ENTRYPOINT ["/usr/local/bin/shelly", "-broker", "$BROKER", "-pin", "$PIN", "-data", "/shelly"]

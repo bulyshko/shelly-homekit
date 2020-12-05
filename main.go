@@ -1,34 +1,42 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
-	"io/ioutil"
+	"fmt"
+	"github.com/brutella/hc"
+	"github.com/brutella/hc/accessory"
+	"github.com/brutella/hc/log"
+	"net/url"
 	"os"
 	"path"
 	"time"
 
-	"github.com/brutella/hc"
-	"github.com/brutella/hc/accessory"
-	"github.com/brutella/hc/log"
-
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 )
 
-type Config struct {
-	Broker   string   `json:"broker"`
-	Pin      string   `json:"pin"`
-	Shellies []Shelly `json:"shellies"`
+type Shelly struct {
+	ID    string `json:"id"`
+	Model string `json:"model"`
 }
 
-type Shelly struct {
-	Id   string `json:"id"`
-	Name string `json:"name"`
+func (d *Shelly) IsSupported() bool {
+	return d.Model == "SHSW-1" || d.Model == "SHSW-L"
+}
+
+type Device struct {
+	accessory *accessory.Switch
+	transport hc.Transport
 }
 
 func main() {
-	dir := flag.String("d", "", "Path to data directory")
-	verbose := flag.Bool("v", false, "Whether or not log output is displayed")
+	devices := map[string]*Device{}
+
+	pin := flag.String("pin", "", "PIN used to pair Shellies with HomeKit")
+	broker := flag.String("broker", "", "MQTT broker")
+	dir := flag.String("data", "", "Path to data directory")
+	verbose := flag.Bool("verbose", false, "Whether or not log output is displayed")
 
 	flag.Parse()
 
@@ -38,71 +46,92 @@ func main() {
 		log.Debug.Enable()
 	}
 
-	var config Config
+	ctx := context.Background()
 
-	file, err := os.Open(path.Join(*dir, "config.json"))
+	uri, err := url.Parse(*broker)
 	if err != nil {
 		log.Info.Panic(err)
 	}
 
-	defer file.Close()
-
-	bytes, _ := ioutil.ReadAll(file)
-
-	if err := json.Unmarshal(bytes, &config); err != nil {
-		log.Info.Panic(err)
-	}
-
 	opts := mqtt.NewClientOptions()
-	opts.AddBroker(config.Broker)
+	opts.SetClientID("ShellyBridge")
+	opts.AddBroker(fmt.Sprintf("tcp://%s", uri.Host))
+
+	if uri.User.Username() != "" {
+		opts.SetUsername(uri.User.Username())
+
+		password, passwordSet := uri.User.Password()
+		if passwordSet {
+			opts.SetPassword(password)
+		}
+	}
 
 	client := mqtt.NewClient(opts)
 	if token := client.Connect(); token.Wait() && token.Error() != nil {
+		log.Info.Println("Unable to connect to the MQTT broker")
 		log.Info.Panic(token.Error())
 	}
 
-	var accessories []*accessory.Accessory
+	if token := client.Subscribe("shellies/announce", 0, func(client mqtt.Client, msg mqtt.Message) {
+		shelly := new(Shelly)
+		if err := json.Unmarshal(msg.Payload(), shelly); err != nil {
+			log.Info.Panic(err)
+		}
 
-	for i := 0; i < len(config.Shellies); i++ {
-		shelly := config.Shellies[i]
+		if !shelly.IsSupported() {
+			return
+		}
 
-		log.Info.Println("New Switch:", shelly.Name)
+		if _, found := devices[shelly.ID]; found {
+			return
+		}
 
-		ac := accessory.NewSwitch(accessory.Info{Name: shelly.Name})
+		ac := accessory.NewSwitch(accessory.Info{
+			Name:  shelly.ID,
+			Model: shelly.Model,
+		})
 
 		ac.Switch.On.OnValueRemoteUpdate(func(on bool) {
 			message := "off"
 			if on == true {
 				message = "on"
 			}
-			client.Publish("shellies/shelly1-"+shelly.Id+"/relay/0/command", 0, true, message)
+			client.Publish("shellies/"+shelly.ID+"/relay/0/command", 0, true, message)
 		})
 
-		if token := client.Subscribe("shellies/shelly1-"+shelly.Id+"/relay/0", 0, func(client mqtt.Client, msg mqtt.Message) {
+		if token := client.Subscribe("shellies/"+shelly.ID+"/relay/0", 0, func(client mqtt.Client, msg mqtt.Message) {
 			ac.Switch.On.SetValue(string(msg.Payload()) == "on")
 		}); token.Wait() && token.Error() != nil {
 			log.Info.Panic(token.Error())
 		}
 
-		accessories = append(accessories, ac.Accessory)
+		transport, err := hc.NewIPTransport(hc.Config{
+			Pin:         *pin,
+			StoragePath: path.Join(*dir, shelly.ID),
+		}, ac.Accessory)
+		if err != nil {
+			log.Info.Panic(err)
+		}
+
+		go func() {
+			transport.Start()
+		}()
+
+		devices[shelly.ID] = &Device{ac, transport}
+	}); token.Wait() && token.Error() != nil {
+		log.Info.Panic(token.Error())
 	}
 
-	bridge := accessory.NewBridge(accessory.Info{Name: "Shelly"})
-
-	transport, err := hc.NewIPTransport(hc.Config{
-		Pin:         config.Pin,
-		StoragePath: path.Join(*dir, "db"),
-	}, bridge.Accessory, accessories...)
-	if err != nil {
-		log.Info.Panic(err)
-	}
+	client.Publish("shellies/command", 0, false, "announce")
 
 	hc.OnTermination(func() {
-		<-transport.Stop()
+		for _, device := range devices {
+			<-device.transport.Stop()
+		}
 
 		time.Sleep(100 * time.Millisecond)
 		os.Exit(1)
 	})
 
-	transport.Start()
+	<-ctx.Done()
 }
