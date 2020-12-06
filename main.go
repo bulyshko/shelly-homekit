@@ -112,13 +112,15 @@ func main() {
 				Model: shelly.Model,
 			})
 
-			ac.Switch.On.OnValueRemoteUpdate(func(on bool) {
-				message := "off"
-				if on == true {
-					message = "on"
+			ac.Switch.On.OnValueRemoteUpdate(func(relay int) func(on bool) {
+				return func(on bool) {
+					message := "off"
+					if on == true {
+						message = "on"
+					}
+					client.Publish("shellies/"+shelly.Name+"/relay/"+strconv.Itoa(relay)+"/command", 0, true, message)
 				}
-				client.Publish("shellies/"+shelly.Name+"/relay/"+strconv.Itoa(i)+"/command", 0, true, message)
-			})
+			}(i))
 
 			if token := client.Subscribe("shellies/"+shelly.Name+"/relay/"+strconv.Itoa(i), 0, func(client mqtt.Client, msg mqtt.Message) {
 				ac.Switch.On.SetValue(string(msg.Payload()) == "on")
