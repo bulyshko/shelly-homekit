@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"strconv"
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
@@ -23,12 +24,29 @@ type Shelly struct {
 }
 
 func (d *Shelly) IsSupported() bool {
-	return d.Model == "SHSW-1" || d.Model == "SHSW-PM" || d.Model == "SHSW-L"
+	return d.Relays() > 0
+}
+
+func (d *Shelly) Relays() int {
+	switch d.Model {
+	case "SHSW-1", "SHSW-PM", "SHSW-L":
+		return 1
+	case "SHSW-25":
+		return 2
+	}
+	return 0
 }
 
 type Device struct {
 	accessory *accessory.Switch
 	transport hc.Transport
+}
+
+func addRelayIndex(str string, index int) string {
+	if index == 0 {
+		return str
+	}
+	return str + "-" + strconv.Itoa(index+1)
 }
 
 func main() {
@@ -83,42 +101,45 @@ func main() {
 			return
 		}
 
-		if _, found := devices[shelly.ID]; found {
-			return
-		}
-
-		ac := accessory.NewSwitch(accessory.Info{
-			Name:  shelly.Name,
-			Model: shelly.Model,
-		})
-
-		ac.Switch.On.OnValueRemoteUpdate(func(on bool) {
-			message := "off"
-			if on == true {
-				message = "on"
+		for i := 0; i < shelly.Relays(); i++ {
+			id := addRelayIndex(shelly.ID, i)
+			if _, found := devices[id]; found {
+				continue
 			}
-			client.Publish("shellies/"+shelly.Name+"/relay/0/command", 0, true, message)
-		})
 
-		if token := client.Subscribe("shellies/"+shelly.Name+"/relay/0", 0, func(client mqtt.Client, msg mqtt.Message) {
-			ac.Switch.On.SetValue(string(msg.Payload()) == "on")
-		}); token.Wait() && token.Error() != nil {
-			log.Info.Panic(token.Error())
+			ac := accessory.NewSwitch(accessory.Info{
+				Name:  addRelayIndex(shelly.Name, i),
+				Model: shelly.Model,
+			})
+
+			ac.Switch.On.OnValueRemoteUpdate(func(on bool) {
+				message := "off"
+				if on == true {
+					message = "on"
+				}
+				client.Publish("shellies/"+shelly.Name+"/relay/"+strconv.Itoa(i)+"/command", 0, true, message)
+			})
+
+			if token := client.Subscribe("shellies/"+shelly.Name+"/relay/"+strconv.Itoa(i), 0, func(client mqtt.Client, msg mqtt.Message) {
+				ac.Switch.On.SetValue(string(msg.Payload()) == "on")
+			}); token.Wait() && token.Error() != nil {
+				log.Info.Panic(token.Error())
+			}
+
+			transport, err := hc.NewIPTransport(hc.Config{
+				Pin:         *pin,
+				StoragePath: path.Join(*dir, id),
+			}, ac.Accessory)
+			if err != nil {
+				log.Info.Panic(err)
+			}
+
+			go func() {
+				transport.Start()
+			}()
+
+			devices[id] = &Device{ac, transport}
 		}
-
-		transport, err := hc.NewIPTransport(hc.Config{
-			Pin:         *pin,
-			StoragePath: path.Join(*dir, shelly.ID),
-		}, ac.Accessory)
-		if err != nil {
-			log.Info.Panic(err)
-		}
-
-		go func() {
-			transport.Start()
-		}()
-
-		devices[shelly.ID] = &Device{ac, transport}
 	}); token.Wait() && token.Error() != nil {
 		log.Info.Panic(token.Error())
 	}
