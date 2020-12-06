@@ -17,7 +17,8 @@ import (
 )
 
 type Shelly struct {
-	ID    string `json:"id"`
+	ID    string `json:"mac"`
+	Name  string `json:"id"`
 	Model string `json:"model"`
 }
 
@@ -87,7 +88,7 @@ func main() {
 		}
 
 		ac := accessory.NewSwitch(accessory.Info{
-			Name:  shelly.ID,
+			Name:  shelly.Name,
 			Model: shelly.Model,
 		})
 
@@ -96,10 +97,10 @@ func main() {
 			if on == true {
 				message = "on"
 			}
-			client.Publish("shellies/"+shelly.ID+"/relay/0/command", 0, true, message)
+			client.Publish("shellies/"+shelly.Name+"/relay/0/command", 0, true, message)
 		})
 
-		if token := client.Subscribe("shellies/"+shelly.ID+"/relay/0", 0, func(client mqtt.Client, msg mqtt.Message) {
+		if token := client.Subscribe("shellies/"+shelly.Name+"/relay/0", 0, func(client mqtt.Client, msg mqtt.Message) {
 			ac.Switch.On.SetValue(string(msg.Payload()) == "on")
 		}); token.Wait() && token.Error() != nil {
 			log.Info.Panic(token.Error())
