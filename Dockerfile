@@ -2,7 +2,6 @@ FROM golang:alpine AS build-env
 
 RUN apk add --update --no-cache ca-certificates git
 
-RUN mkdir /build
 WORKDIR /build
 
 ADD ./go.mod .
