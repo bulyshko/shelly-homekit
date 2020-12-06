@@ -23,7 +23,7 @@ type Shelly struct {
 }
 
 func (d *Shelly) IsSupported() bool {
-	return d.Model == "SHSW-1" || d.Model == "SHSW-L"
+	return d.Model == "SHSW-1" || d.Model == "SHSW-PM" || d.Model == "SHSW-L"
 }
 
 type Device struct {
