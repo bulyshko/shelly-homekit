@@ -1,4 +1,4 @@
-module github.com/bulyshko/shelly
+module github.com/bulyshko/shelly-homekit
 
 go 1.15
 
